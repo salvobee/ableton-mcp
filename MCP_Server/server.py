@@ -694,6 +694,123 @@ def stop_playback(ctx: Context) -> str:
         logger.error(f"Error stopping playback: {str(e)}")
         return f"Error stopping playback: {str(e)}"
 
+
+# --- Arrangement View tools ---
+
+@mcp.tool()
+def list_arrangement_clips(ctx: Context, track_index: int) -> str:
+    """
+    List clips currently in the Arrangement View for a given track.
+
+    Returns name, start_time/end_time/length (in beats), is_midi_clip, color
+    and an `index` you can pass to add_notes_to_arrangement_clip.
+
+    Parameters:
+    - track_index: The index of the track
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("list_arrangement_clips", {
+            "track_index": track_index
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error listing arrangement clips: {str(e)}")
+        return f"Error listing arrangement clips: {str(e)}"
+
+@mcp.tool()
+def create_arrangement_midi_clip(
+    ctx: Context,
+    track_index: int,
+    start_time: float,
+    length: float,
+    name: str = None,
+) -> str:
+    """
+    Create an empty MIDI clip in the Arrangement View at start_time, of given length (beats).
+    Track must be a MIDI track. Returns the new clip's arrangement_clip_index.
+
+    Parameters:
+    - track_index: The index of the MIDI track
+    - start_time: Position in beats where the clip starts (1 bar in 4/4 = 4 beats)
+    - length: Clip length in beats
+    - name: Optional clip name
+    """
+    try:
+        ableton = get_ableton_connection()
+        params = {
+            "track_index": track_index,
+            "start_time": start_time,
+            "length": length,
+        }
+        if name is not None:
+            params["name"] = name
+        result = ableton.send_command("create_arrangement_midi_clip", params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating arrangement midi clip: {str(e)}")
+        return f"Error creating arrangement midi clip: {str(e)}"
+
+@mcp.tool()
+def add_notes_to_arrangement_clip(
+    ctx: Context,
+    track_index: int,
+    arrangement_clip_index: int,
+    notes: List[Dict[str, Union[int, float, bool]]],
+) -> str:
+    """
+    Add MIDI notes to an existing Arrangement View clip.
+
+    Use list_arrangement_clips first to get the arrangement_clip_index of the
+    clip you want to edit. Note schema matches add_notes_to_clip:
+    pitch, start_time, duration, velocity, mute.
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - arrangement_clip_index: Index of the clip in track.arrangement_clips
+    - notes: List of note dicts {pitch, start_time, duration, velocity, mute}
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("add_notes_to_arrangement_clip", {
+            "track_index": track_index,
+            "arrangement_clip_index": arrangement_clip_index,
+            "notes": notes,
+        })
+        return f"Added {len(notes)} notes to arrangement clip {arrangement_clip_index} on track {track_index}"
+    except Exception as e:
+        logger.error(f"Error adding notes to arrangement clip: {str(e)}")
+        return f"Error adding notes to arrangement clip: {str(e)}"
+
+@mcp.tool()
+def duplicate_session_clip_to_arrangement(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    time: float,
+) -> str:
+    """
+    Stamp an existing Session View clip into the Arrangement View at the given time (beats).
+    The Session clip stays where it is; a copy is placed in arrangement.
+
+    Parameters:
+    - track_index: The index of the track (must be the same track in both views)
+    - clip_index: The session clip slot index containing the source clip
+    - time: Beat position where the duplicated clip should land in arrangement
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("duplicate_session_clip_to_arrangement", {
+            "track_index": track_index,
+            "clip_index": clip_index,
+            "time": time,
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error duplicating session clip to arrangement: {str(e)}")
+        return f"Error duplicating session clip to arrangement: {str(e)}"
+
+
 @mcp.tool()
 def get_browser_tree(ctx: Context, category_type: str = "all") -> str:
     """

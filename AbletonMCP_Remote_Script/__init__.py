@@ -232,6 +232,9 @@ class AbletonMCP(ControlSurface):
             elif command_type == "get_scene_info":
                 scene_index = params.get("scene_index", 0)
                 response["result"] = self._get_scene_info(scene_index)
+            elif command_type == "list_arrangement_clips":
+                track_index = params.get("track_index", 0)
+                response["result"] = self._list_arrangement_clips(track_index)
             # Commands that modify Live's state should be scheduled on the main thread
             elif command_type in ["create_midi_track", "set_track_name",
                                  "create_clip", "add_notes_to_clip", "set_clip_name",
@@ -239,7 +242,10 @@ class AbletonMCP(ControlSurface):
                                  "start_playback", "stop_playback", "load_browser_item",
                                  "set_scene_name", "create_scene", "set_scene_tempo",
                                  "set_clip_color", "set_clip_color_palette",
-                                 "set_track_color", "set_scene_color"]:
+                                 "set_track_color", "set_scene_color",
+                                 "create_arrangement_midi_clip",
+                                 "add_notes_to_arrangement_clip",
+                                 "duplicate_session_clip_to_arrangement"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -321,6 +327,22 @@ class AbletonMCP(ControlSurface):
                             scene_index = params.get("scene_index", 0)
                             color = params.get("color", 0)
                             result = self._set_scene_color(scene_index, color)
+                        elif command_type == "create_arrangement_midi_clip":
+                            track_index = params.get("track_index", 0)
+                            start_time = params.get("start_time", 0.0)
+                            length = params.get("length", 4.0)
+                            name = params.get("name", None)
+                            result = self._create_arrangement_midi_clip(track_index, start_time, length, name)
+                        elif command_type == "add_notes_to_arrangement_clip":
+                            track_index = params.get("track_index", 0)
+                            arrangement_clip_index = params.get("arrangement_clip_index", 0)
+                            notes = params.get("notes", [])
+                            result = self._add_notes_to_arrangement_clip(track_index, arrangement_clip_index, notes)
+                        elif command_type == "duplicate_session_clip_to_arrangement":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            time = params.get("time", 0.0)
+                            result = self._duplicate_session_clip_to_arrangement(track_index, clip_index, time)
 
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -1046,6 +1068,123 @@ class AbletonMCP(ControlSurface):
             }
         except Exception as e:
             self.log_message("Error setting scene color: " + str(e))
+            raise
+
+    # --- Arrangement View ---
+
+    def _arrangement_clip_summary(self, clip, index):
+        info = {
+            "index": index,
+            "name": clip.name,
+            "start_time": clip.start_time,
+            "end_time": clip.end_time,
+            "length": clip.length,
+            "is_midi_clip": clip.is_midi_clip,
+            "color": clip.color,
+        }
+        return info
+
+    def _find_arrangement_clip_index_by_identity(self, track, target_clip):
+        for i, c in enumerate(track.arrangement_clips):
+            if c == target_clip:
+                return i
+        return -1
+
+    def _list_arrangement_clips(self, track_index):
+        """Return inventory of arrangement clips on a track."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            clips = [self._arrangement_clip_summary(c, i)
+                     for i, c in enumerate(track.arrangement_clips)]
+            return {
+                "track_index": track_index,
+                "arrangement_clip_count": len(clips),
+                "clips": clips,
+            }
+        except Exception as e:
+            self.log_message("Error listing arrangement clips: " + str(e))
+            raise
+
+    def _create_arrangement_midi_clip(self, track_index, start_time, length, name=None):
+        """Create an empty MIDI clip in the Arrangement View at start_time, of given length (beats)."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            if not track.has_midi_input:
+                raise Exception("Track is not a MIDI track")
+            if length <= 0:
+                raise ValueError("length must be > 0")
+            start = float(start_time)
+            end = start + float(length)
+            new_clip = track.create_midi_clip(start, end)
+            if name:
+                new_clip.name = name
+            idx = self._find_arrangement_clip_index_by_identity(track, new_clip)
+            return self._arrangement_clip_summary(new_clip, idx)
+        except Exception as e:
+            self.log_message("Error creating arrangement midi clip: " + str(e))
+            raise
+
+    def _add_notes_to_arrangement_clip(self, track_index, arrangement_clip_index, notes):
+        """Add MIDI notes to an existing arrangement clip (same note schema as session)."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            arr_clips = track.arrangement_clips
+            if arrangement_clip_index < 0 or arrangement_clip_index >= len(arr_clips):
+                raise IndexError("Arrangement clip index out of range")
+            clip = arr_clips[arrangement_clip_index]
+            if not clip.is_midi_clip:
+                raise Exception("Arrangement clip is not MIDI")
+            live_notes = []
+            for note in notes:
+                pitch = note.get("pitch", 60)
+                start_time = note.get("start_time", 0.0)
+                duration = note.get("duration", 0.25)
+                velocity = note.get("velocity", 100)
+                mute = note.get("mute", False)
+                live_notes.append((pitch, start_time, duration, velocity, mute))
+            clip.set_notes(tuple(live_notes))
+            return {
+                "track_index": track_index,
+                "arrangement_clip_index": arrangement_clip_index,
+                "note_count": len(live_notes),
+            }
+        except Exception as e:
+            self.log_message("Error adding notes to arrangement clip: " + str(e))
+            raise
+
+    def _duplicate_session_clip_to_arrangement(self, track_index, clip_index, time):
+        """Stamp a Session clip into the Arrangement View at the given time (beats)."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            slot = track.clip_slots[clip_index]
+            if not slot.has_clip:
+                raise Exception("No session clip in slot")
+            source_clip = slot.clip
+            track.duplicate_clip_to_arrangement(source_clip, float(time))
+            # The newly-stamped clip is the one whose start_time matches `time`.
+            target = float(time)
+            best_idx = -1
+            best_diff = None
+            for i, c in enumerate(track.arrangement_clips):
+                diff = abs(c.start_time - target)
+                if best_diff is None or diff < best_diff:
+                    best_diff = diff
+                    best_idx = i
+            if best_idx < 0:
+                raise Exception("Failed to locate duplicated arrangement clip")
+            return self._arrangement_clip_summary(track.arrangement_clips[best_idx], best_idx)
+        except Exception as e:
+            self.log_message("Error duplicating session clip to arrangement: " + str(e))
             raise
 
     # Helper methods
