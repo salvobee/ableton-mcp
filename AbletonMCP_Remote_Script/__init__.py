@@ -237,7 +237,9 @@ class AbletonMCP(ControlSurface):
                                  "create_clip", "add_notes_to_clip", "set_clip_name",
                                  "set_tempo", "fire_clip", "stop_clip",
                                  "start_playback", "stop_playback", "load_browser_item",
-                                 "set_scene_name", "create_scene", "set_scene_tempo"]:
+                                 "set_scene_name", "create_scene", "set_scene_tempo",
+                                 "set_clip_color", "set_clip_color_palette",
+                                 "set_track_color", "set_scene_color"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -301,6 +303,24 @@ class AbletonMCP(ControlSurface):
                             scene_index = params.get("scene_index", 0)
                             tempo = params.get("tempo", -1.0)
                             result = self._set_scene_tempo(scene_index, tempo)
+                        elif command_type == "set_clip_color":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            color = params.get("color", 0)
+                            result = self._set_clip_color(track_index, clip_index, color)
+                        elif command_type == "set_clip_color_palette":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            palette_index = params.get("palette_index", 0)
+                            result = self._set_clip_color_palette(track_index, clip_index, palette_index)
+                        elif command_type == "set_track_color":
+                            track_index = params.get("track_index", 0)
+                            color = params.get("color", 0)
+                            result = self._set_track_color(track_index, color)
+                        elif command_type == "set_scene_color":
+                            scene_index = params.get("scene_index", 0)
+                            color = params.get("color", 0)
+                            result = self._set_scene_color(scene_index, color)
 
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -951,6 +971,81 @@ class AbletonMCP(ControlSurface):
             return result
         except Exception as e:
             self.log_message("Error setting scene tempo: " + str(e))
+            raise
+
+    def _set_clip_color(self, track_index, clip_index, color):
+        """Set the color of a clip (RGB packed int — Live snaps to palette)."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            clip_slot = track.clip_slots[clip_index]
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+            clip_slot.clip.color = int(color)
+            return {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "color": clip_slot.clip.color
+            }
+        except Exception as e:
+            self.log_message("Error setting clip color: " + str(e))
+            raise
+
+    def _set_clip_color_palette(self, track_index, clip_index, palette_index):
+        """Set the color of a clip by palette index (0..69)."""
+        try:
+            if palette_index < 0 or palette_index > 69:
+                raise ValueError("Palette index must be between 0 and 69")
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            clip_slot = track.clip_slots[clip_index]
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+            clip_slot.clip.color_index = int(palette_index)
+            return {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "color_index": clip_slot.clip.color_index,
+                "color": clip_slot.clip.color
+            }
+        except Exception as e:
+            self.log_message("Error setting clip color palette: " + str(e))
+            raise
+
+    def _set_track_color(self, track_index, color):
+        """Set the color of a track header (RGB packed int — Live snaps to palette)."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            track.color = int(color)
+            return {
+                "track_index": track_index,
+                "color": track.color
+            }
+        except Exception as e:
+            self.log_message("Error setting track color: " + str(e))
+            raise
+
+    def _set_scene_color(self, scene_index, color):
+        """Set the color of a scene (master column row — RGB packed int)."""
+        try:
+            if scene_index < 0 or scene_index >= len(self._song.scenes):
+                raise IndexError("Scene index out of range")
+            scene = self._song.scenes[scene_index]
+            scene.color = int(color)
+            return {
+                "scene_index": scene_index,
+                "color": scene.color
+            }
+        except Exception as e:
+            self.log_message("Error setting scene color: " + str(e))
             raise
 
     # Helper methods

@@ -105,7 +105,9 @@ class AbletonConnection:
             "create_midi_track", "create_audio_track", "set_track_name",
             "create_clip", "add_notes_to_clip", "set_clip_name",
             "set_tempo", "fire_clip", "stop_clip", "set_device_parameter",
-            "start_playback", "stop_playback", "load_instrument_or_effect"
+            "start_playback", "stop_playback", "load_instrument_or_effect",
+            "set_clip_color", "set_clip_color_palette",
+            "set_track_color", "set_scene_color"
         ]
         
         try:
@@ -305,7 +307,7 @@ def create_midi_track(ctx: Context, index: int = -1) -> str:
 def set_track_name(ctx: Context, track_index: int, name: str) -> str:
     """
     Set the name of a track.
-    
+
     Parameters:
     - track_index: The index of the track to rename
     - name: The new name for the track
@@ -317,6 +319,28 @@ def set_track_name(ctx: Context, track_index: int, name: str) -> str:
     except Exception as e:
         logger.error(f"Error setting track name: {str(e)}")
         return f"Error setting track name: {str(e)}"
+
+@mcp.tool()
+def set_track_color(ctx: Context, track_index: int, color: int) -> str:
+    """
+    Set the color of a track header (and the default color new clips inherit).
+
+    Parameters:
+    - track_index: The index of the track to color
+    - color: RGB packed integer (e.g. 0x6633CC). Ableton snaps to the nearest
+             of its 70 palette colors.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_track_color", {
+            "track_index": track_index,
+            "color": color
+        })
+        actual = result.get("color", color)
+        return f"Set color of track {track_index} to 0x{actual:06X}"
+    except Exception as e:
+        logger.error(f"Error setting track color: {str(e)}")
+        return f"Error setting track color: {str(e)}"
 
 @mcp.tool()
 def create_clip(ctx: Context, track_index: int, clip_index: int, length: float = 4.0) -> str:
@@ -371,7 +395,7 @@ def add_notes_to_clip(
 def set_clip_name(ctx: Context, track_index: int, clip_index: int, name: str) -> str:
     """
     Set the name of a clip.
-    
+
     Parameters:
     - track_index: The index of the track containing the clip
     - clip_index: The index of the clip slot containing the clip
@@ -388,6 +412,55 @@ def set_clip_name(ctx: Context, track_index: int, clip_index: int, name: str) ->
     except Exception as e:
         logger.error(f"Error setting clip name: {str(e)}")
         return f"Error setting clip name: {str(e)}"
+
+@mcp.tool()
+def set_clip_color(ctx: Context, track_index: int, clip_index: int, color: int) -> str:
+    """
+    Set the color of a clip in Session View.
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - clip_index: The index of the clip slot containing the clip
+    - color: RGB packed integer (e.g. 0x6633CC). Ableton snaps to the nearest
+             of its 70 palette colors.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_clip_color", {
+            "track_index": track_index,
+            "clip_index": clip_index,
+            "color": color
+        })
+        actual = result.get("color", color)
+        return f"Set color of clip at track {track_index}, slot {clip_index} to 0x{actual:06X}"
+    except Exception as e:
+        logger.error(f"Error setting clip color: {str(e)}")
+        return f"Error setting clip color: {str(e)}"
+
+@mcp.tool()
+def set_clip_color_palette(ctx: Context, track_index: int, clip_index: int, palette_index: int) -> str:
+    """
+    Set the color of a clip by Ableton palette index (0..69). More precise than
+    set_clip_color when you want an exact palette swatch instead of letting Live
+    snap an arbitrary RGB.
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - clip_index: The index of the clip slot containing the clip
+    - palette_index: Integer 0..69 — index into Ableton's color palette
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_clip_color_palette", {
+            "track_index": track_index,
+            "clip_index": clip_index,
+            "palette_index": palette_index
+        })
+        return (f"Set palette color of clip at track {track_index}, slot {clip_index} "
+                f"to palette index {result.get('color_index', palette_index)}")
+    except Exception as e:
+        logger.error(f"Error setting clip color palette: {str(e)}")
+        return f"Error setting clip color palette: {str(e)}"
 
 @mcp.tool()
 def set_tempo(ctx: Context, tempo: float) -> str:
@@ -505,6 +578,28 @@ def set_scene_tempo(ctx: Context, scene_index: int, tempo: float) -> str:
     except Exception as e:
         logger.error(f"Error setting scene tempo: {str(e)}")
         return f"Error setting scene tempo: {str(e)}"
+
+@mcp.tool()
+def set_scene_color(ctx: Context, scene_index: int, color: int) -> str:
+    """
+    Set the color of a scene (the row in the master column of Session View).
+
+    Parameters:
+    - scene_index: The index of the scene (0-based)
+    - color: RGB packed integer (e.g. 0x6633CC). Ableton snaps to the nearest
+             of its 70 palette colors.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_scene_color", {
+            "scene_index": scene_index,
+            "color": color
+        })
+        actual = result.get("color", color)
+        return f"Set color of scene {scene_index} to 0x{actual:06X}"
+    except Exception as e:
+        logger.error(f"Error setting scene color: {str(e)}")
+        return f"Error setting scene color: {str(e)}"
 
 
 @mcp.tool()
