@@ -225,11 +225,19 @@ class AbletonMCP(ControlSurface):
             elif command_type == "get_track_info":
                 track_index = params.get("track_index", 0)
                 response["result"] = self._get_track_info(track_index)
+            elif command_type == "get_clip_notes":
+                track_index = params.get("track_index", 0)
+                clip_index = params.get("clip_index", 0)
+                response["result"] = self._get_clip_notes(track_index, clip_index)
+            elif command_type == "get_scene_info":
+                scene_index = params.get("scene_index", 0)
+                response["result"] = self._get_scene_info(scene_index)
             # Commands that modify Live's state should be scheduled on the main thread
-            elif command_type in ["create_midi_track", "set_track_name", 
-                                 "create_clip", "add_notes_to_clip", "set_clip_name", 
+            elif command_type in ["create_midi_track", "set_track_name",
+                                 "create_clip", "add_notes_to_clip", "set_clip_name",
                                  "set_tempo", "fire_clip", "stop_clip",
-                                 "start_playback", "stop_playback", "load_browser_item"]:
+                                 "start_playback", "stop_playback", "load_browser_item",
+                                 "set_scene_name", "create_scene", "set_scene_tempo"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -282,7 +290,18 @@ class AbletonMCP(ControlSurface):
                             track_index = params.get("track_index", 0)
                             item_uri = params.get("item_uri", "")
                             result = self._load_browser_item(track_index, item_uri)
-                        
+                        elif command_type == "set_scene_name":
+                            scene_index = params.get("scene_index", 0)
+                            name = params.get("name", "")
+                            result = self._set_scene_name(scene_index, name)
+                        elif command_type == "create_scene":
+                            scene_index = params.get("scene_index", -1)
+                            result = self._create_scene(scene_index)
+                        elif command_type == "set_scene_tempo":
+                            scene_index = params.get("scene_index", 0)
+                            tempo = params.get("tempo", -1.0)
+                            result = self._set_scene_tempo(scene_index, tempo)
+
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
                     except Exception as e:
@@ -799,8 +818,143 @@ class AbletonMCP(ControlSurface):
             self.log_message("Error finding browser item by URI: {0}".format(str(e)))
             return None
     
+    def _get_clip_notes(self, track_index, clip_index):
+        """Get all MIDI notes from a clip"""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+
+            track = self._song.tracks[track_index]
+
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+
+            clip_slot = track.clip_slots[clip_index]
+
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+
+            clip = clip_slot.clip
+
+            if not clip.is_midi_clip:
+                raise Exception("Clip is not a MIDI clip")
+
+            # Clip.get_notes(from_time, from_pitch, time_span, pitch_span)
+            # Returns tuple of (pitch, time, duration, velocity, mute) tuples
+            raw_notes = clip.get_notes(0.0, 0, clip.length, 128)
+
+            notes = []
+            for n in raw_notes:
+                notes.append({
+                    "pitch": n[0],
+                    "start_time": n[1],
+                    "duration": n[2],
+                    "velocity": n[3],
+                    "mute": n[4]
+                })
+
+            result = {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "name": clip.name,
+                "length": clip.length,
+                "is_midi_clip": clip.is_midi_clip,
+                "signature_numerator": clip.signature_numerator,
+                "signature_denominator": clip.signature_denominator,
+                "note_count": len(notes),
+                "notes": notes
+            }
+            return result
+        except Exception as e:
+            self.log_message("Error getting clip notes: " + str(e))
+            raise
+
+    def _get_scene_info(self, scene_index):
+        """Get information about a scene (name, tempo, color, clip_slots count)"""
+        try:
+            if scene_index < 0 or scene_index >= len(self._song.scenes):
+                raise IndexError("Scene index out of range")
+
+            scene = self._song.scenes[scene_index]
+
+            result = {
+                "index": scene_index,
+                "name": scene.name,
+                "tempo": scene.tempo,
+                "color": scene.color if hasattr(scene, "color") else None,
+                "is_empty": scene.is_empty if hasattr(scene, "is_empty") else None,
+                "is_triggered": scene.is_triggered if hasattr(scene, "is_triggered") else None,
+                "total_scenes": len(self._song.scenes)
+            }
+            return result
+        except Exception as e:
+            self.log_message("Error getting scene info: " + str(e))
+            raise
+
+    def _set_scene_name(self, scene_index, name):
+        """Set the name of a scene (master column label)"""
+        try:
+            if scene_index < 0 or scene_index >= len(self._song.scenes):
+                raise IndexError("Scene index out of range")
+
+            scene = self._song.scenes[scene_index]
+            scene.name = name
+
+            result = {
+                "scene_index": scene_index,
+                "name": scene.name
+            }
+            return result
+        except Exception as e:
+            self.log_message("Error setting scene name: " + str(e))
+            raise
+
+    def _create_scene(self, scene_index):
+        """Create a new empty scene. scene_index=-1 appends at end, else inserts at index."""
+        try:
+            total = len(self._song.scenes)
+            if scene_index == -1:
+                insert_at = total
+            else:
+                if scene_index < 0 or scene_index > total:
+                    raise IndexError("Scene index out of range")
+                insert_at = scene_index
+
+            self._song.create_scene(insert_at)
+
+            result = {
+                "created_at": insert_at,
+                "total_scenes": len(self._song.scenes)
+            }
+            return result
+        except Exception as e:
+            self.log_message("Error creating scene: " + str(e))
+            raise
+
+    def _set_scene_tempo(self, scene_index, tempo):
+        """Set the tempo override of a scene. tempo=-1 clears the override."""
+        try:
+            if scene_index < 0 or scene_index >= len(self._song.scenes):
+                raise IndexError("Scene index out of range")
+
+            # Validate tempo: -1 means "no override", otherwise 20..999 BPM
+            if tempo != -1 and (tempo < 20 or tempo > 999):
+                raise ValueError("Tempo must be between 20 and 999 BPM (or -1 to clear override)")
+
+            scene = self._song.scenes[scene_index]
+            scene.tempo = tempo
+
+            result = {
+                "scene_index": scene_index,
+                "tempo": scene.tempo
+            }
+            return result
+        except Exception as e:
+            self.log_message("Error setting scene tempo: " + str(e))
+            raise
+
     # Helper methods
-    
+
     def _get_device_type(self, device):
         """Get the type of a device"""
         try:

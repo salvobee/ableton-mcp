@@ -393,7 +393,7 @@ def set_clip_name(ctx: Context, track_index: int, clip_index: int, name: str) ->
 def set_tempo(ctx: Context, tempo: float) -> str:
     """
     Set the tempo of the Ableton session.
-    
+
     Parameters:
     - tempo: The new tempo in BPM
     """
@@ -404,6 +404,107 @@ def set_tempo(ctx: Context, tempo: float) -> str:
     except Exception as e:
         logger.error(f"Error setting tempo: {str(e)}")
         return f"Error setting tempo: {str(e)}"
+
+@mcp.tool()
+def get_clip_notes(ctx: Context, track_index: int, clip_index: int) -> str:
+    """
+    Read all MIDI notes from a clip. Returns clip metadata and a list of notes,
+    each with pitch (0-127), start_time (beats), duration (beats), velocity (1-127), mute (bool).
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - clip_index: The index of the clip slot containing the clip
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_clip_notes", {
+            "track_index": track_index,
+            "clip_index": clip_index
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting clip notes: {str(e)}")
+        return f"Error getting clip notes: {str(e)}"
+
+@mcp.tool()
+def get_scene_info(ctx: Context, scene_index: int) -> str:
+    """
+    Get information about a scene (name, tempo override, color, triggered state, total scenes).
+
+    Parameters:
+    - scene_index: The index of the scene in the master column (0-based)
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_scene_info", {"scene_index": scene_index})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting scene info: {str(e)}")
+        return f"Error getting scene info: {str(e)}"
+
+@mcp.tool()
+def set_scene_name(ctx: Context, scene_index: int, name: str) -> str:
+    """
+    Set the name of a scene (the label shown in the master column of Session View).
+
+    Parameters:
+    - scene_index: The index of the scene (0-based)
+    - name: The new name for the scene
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_scene_name", {
+            "scene_index": scene_index,
+            "name": name
+        })
+        return f"Renamed scene {scene_index} to '{result.get('name', name)}'"
+    except Exception as e:
+        logger.error(f"Error setting scene name: {str(e)}")
+        return f"Error setting scene name: {str(e)}"
+
+@mcp.tool()
+def create_scene(ctx: Context, scene_index: int = -1) -> str:
+    """
+    Create a new empty scene in Session View. Existing scenes at or after the
+    insertion index slide down by one position (clips move with their scenes).
+
+    Parameters:
+    - scene_index: Position to insert the new scene at (0-based).
+                   Use -1 to append at the end of the scene list.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("create_scene", {"scene_index": scene_index})
+        return (f"Created scene at index {result.get('created_at')}. "
+                f"Total scenes now: {result.get('total_scenes')}")
+    except Exception as e:
+        logger.error(f"Error creating scene: {str(e)}")
+        return f"Error creating scene: {str(e)}"
+
+@mcp.tool()
+def set_scene_tempo(ctx: Context, scene_index: int, tempo: float) -> str:
+    """
+    Set the tempo override for a scene. When the scene is fired, the global tempo
+    will change to this value. Pass tempo=-1 to clear the override (scene will not
+    change tempo when fired).
+
+    Parameters:
+    - scene_index: The index of the scene (0-based)
+    - tempo: BPM value between 20 and 999, or -1 to clear the override
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_scene_tempo", {
+            "scene_index": scene_index,
+            "tempo": tempo
+        })
+        actual = result.get("tempo", tempo)
+        if actual == -1:
+            return f"Cleared tempo override on scene {scene_index}"
+        return f"Set tempo override on scene {scene_index} to {actual} BPM"
+    except Exception as e:
+        logger.error(f"Error setting scene tempo: {str(e)}")
+        return f"Error setting scene tempo: {str(e)}"
 
 
 @mcp.tool()
