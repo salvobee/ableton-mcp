@@ -159,12 +159,15 @@ The tables below list the new tools grouped by area. See each tool's docstring i
 | `set_device_parameters(track, device, {name: value, ...})` | Batch-patch a device; per-parameter errors reported, not fatal |
 | `toggle_device(track, device, on)` | Enable/bypass via the device's `Device On` parameter (`is_active` is read-only in the LOM) |
 | `delete_device(track, device)` | Remove a device from the track's device chain |
-| `move_device(track, device, new_index)` | Reorder a device — see note below |
+| `move_device(track, device, new_index)` | ⚠️ **Not exposed in current LOM** — returns a clean error (see note) |
 
-> **`move_device` caveat:** stable device reordering is not guaranteed to be exposed
-> in every Live version's LOM. The handler calls `Track.move_device(...)` if present
-> and otherwise returns an explicit error rather than faking the move — needs a
-> Live 12 smoke-test to confirm.
+> **`move_device` — confirmed unsupported on Live 12** (smoke-tested 2026-07):
+> `Track.move_device` is not exposed by the Live API, so device reordering cannot be
+> done through the LOM. The handler's `hasattr` guard fires and it returns a clean,
+> explicit error (no crash); the tool is kept as a forward-compat stub in case a
+> future Live exposes the method. It deliberately does **not** fake the move via
+> delete + re-add (that would lose device state/automation). If reordering is truly
+> needed, `delete_device` + re-load is the documented follow-up.
 >
 > **Nested / rack chain access** (`get_device_chain`, devices inside Instrument/Audio
 > Effect Racks) is **deferred** as a follow-up: the top-level `track.devices` path is

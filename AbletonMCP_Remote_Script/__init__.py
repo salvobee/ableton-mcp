@@ -1578,9 +1578,13 @@ class AbletonMCP(ControlSurface):
     def _move_device(self, track_index, device_index, new_index):
         """Reorder a device within a track's device chain.
 
-        LOM CAVEAT: reliable public device-reordering is not guaranteed across
-        Live versions. We call Track.move_device(...) when present and otherwise
-        raise a clear error instead of silently faking the move.
+        LOM LIMIT (confirmed on Live 12, 2026-07): Track.move_device is NOT
+        exposed — device reordering is not available through the Live API. The
+        hasattr() guard below therefore always falls through to a clean error;
+        this tool can never succeed on current Live. Kept as a forward-compat
+        stub (in case a future Live exposes it) rather than faking the move via
+        delete+re-add, which would lose device state/automation. If reordering
+        is truly needed, a delete_device + re-load is the documented follow-up.
         """
         try:
             track = self._get_track_or_raise(track_index)
