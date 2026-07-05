@@ -107,7 +107,11 @@ class AbletonConnection:
             "set_tempo", "fire_clip", "stop_clip", "set_device_parameter",
             "start_playback", "stop_playback", "load_instrument_or_effect",
             "set_clip_color", "set_clip_color_palette",
-            "set_track_color", "set_scene_color"
+            "set_track_color", "set_scene_color",
+            "set_scale", "set_scale_mode",
+            "set_device_parameters", "toggle_device",
+            "delete_device", "move_device",
+            "clear_clip_notes", "replace_clip_notes", "remove_notes"
         ]
         
         try:
@@ -963,6 +967,345 @@ def load_drum_kit(ctx: Context, track_index: int, rack_uri: str, kit_path: str) 
     except Exception as e:
         logger.error(f"Error loading drum kit: {str(e)}")
         return f"Error loading drum kit: {str(e)}"
+
+# --- A. Global Scale (Live 12) tools ---
+
+@mcp.tool()
+def get_scale(ctx: Context) -> str:
+    """
+    Read the global Scale settings of the Live 12 project: root_note (0-11, C=0..B=11),
+    scale_name (e.g. "Major", "Minor"), scale_intervals (read-only semitone pattern),
+    and scale_mode (whether the global Scale feature is enabled).
+
+    On a Live version without the global Scale feature, fields come back null and
+    scale_supported is false.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_scale")
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting scale: {str(e)}")
+        return f"Error getting scale: {str(e)}"
+
+@mcp.tool()
+def set_scale(ctx: Context, root_note: int, scale_name: str) -> str:
+    """
+    Set the global scale of the Live 12 project.
+
+    Parameters:
+    - root_note: Root note as an int 0-11 (C=0, C#=1, D=2 ... B=11). E.g. 5 = F.
+    - scale_name: Name of the scale as Live spells it (e.g. "Major", "Minor",
+      "Dorian", "Phrygian", "Mixolydian", "Aeolian", "Harmonic Minor").
+    Requires Live 12 (returns an error on older versions).
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_scale", {
+            "root_note": root_note,
+            "scale_name": scale_name
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error setting scale: {str(e)}")
+        return f"Error setting scale: {str(e)}"
+
+@mcp.tool()
+def set_scale_mode(ctx: Context, enabled: bool) -> str:
+    """
+    Toggle the global Scale mode of the Live 12 project on or off.
+
+    Parameters:
+    - enabled: True to turn the global Scale on, False to turn it off.
+    Requires Live 12.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_scale_mode", {"enabled": enabled})
+        return f"Set global scale_mode to {result.get('scale_mode', enabled)}"
+    except Exception as e:
+        logger.error(f"Error setting scale mode: {str(e)}")
+        return f"Error setting scale mode: {str(e)}"
+
+
+# --- B. Device & parameter tools ---
+
+@mcp.tool()
+def get_device_list(ctx: Context, track_index: int) -> str:
+    """
+    List the devices on a track. For each device returns index, name, class_name,
+    type, is_active, can_have_chains and num_parameters.
+
+    Parameters:
+    - track_index: The index of the track
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_device_list", {"track_index": track_index})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting device list: {str(e)}")
+        return f"Error getting device list: {str(e)}"
+
+@mcp.tool()
+def get_device_parameters(ctx: Context, track_index: int, device_index: int) -> str:
+    """
+    List every parameter of a device on a track. For each parameter returns index,
+    name, value, min, max, is_quantized, display_value and (for quantized/enum
+    parameters) value_items.
+
+    Use this to discover parameter names/indices before calling set_device_parameter.
+
+    Parameters:
+    - track_index: The index of the track
+    - device_index: The index of the device on that track (see get_device_list)
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_device_parameters", {
+            "track_index": track_index,
+            "device_index": device_index
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting device parameters: {str(e)}")
+        return f"Error getting device parameters: {str(e)}"
+
+@mcp.tool()
+def set_device_parameter(
+    ctx: Context,
+    track_index: int,
+    device_index: int,
+    parameter: Union[int, str],
+    value: float
+) -> str:
+    """
+    Set a single device parameter (turn one knob). The value is clamped to the
+    parameter's [min, max] range.
+
+    Parameters:
+    - track_index: The index of the track
+    - device_index: The index of the device on that track
+    - parameter: Parameter identifier — either an integer index or a parameter
+      name (e.g. 3 or "Frequency"). Names are matched case-insensitively.
+    - value: The target value (in the parameter's own units/range). For quantized
+      parameters pass the enum's numeric value.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_device_parameter", {
+            "track_index": track_index,
+            "device_index": device_index,
+            "parameter": parameter,
+            "value": value
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error setting device parameter: {str(e)}")
+        return f"Error setting device parameter: {str(e)}"
+
+@mcp.tool()
+def set_device_parameters(
+    ctx: Context,
+    track_index: int,
+    device_index: int,
+    parameters: Dict[str, float]
+) -> str:
+    """
+    Batch-set multiple parameters of a device in one call (patch a synth/effect).
+
+    Parameters:
+    - track_index: The index of the track
+    - device_index: The index of the device on that track
+    - parameters: A mapping of parameter name (or index-as-string) to value,
+      e.g. {"Frequency": 800, "Resonance": 0.4, "3": 1.0}. Each value is clamped
+      to that parameter's range. Per-parameter failures are reported in `errors`
+      without aborting the rest of the patch.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_device_parameters", {
+            "track_index": track_index,
+            "device_index": device_index,
+            "parameters": parameters
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error setting device parameters: {str(e)}")
+        return f"Error setting device parameters: {str(e)}"
+
+@mcp.tool()
+def toggle_device(ctx: Context, track_index: int, device_index: int, on: bool) -> str:
+    """
+    Enable or bypass a device. Live's LOM drives this through the device's
+    'Device On' parameter (Device.is_active itself is read-only), so this works
+    for native Live devices. Returns an error if the device has no 'Device On'
+    parameter.
+
+    Parameters:
+    - track_index: The index of the track
+    - device_index: The index of the device on that track
+    - on: True to enable the device, False to bypass it
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("toggle_device", {
+            "track_index": track_index,
+            "device_index": device_index,
+            "on": on
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error toggling device: {str(e)}")
+        return f"Error toggling device: {str(e)}"
+
+@mcp.tool()
+def delete_device(ctx: Context, track_index: int, device_index: int) -> str:
+    """
+    Delete a device from a track's device chain. Device indices shift down after
+    the deleted device, so re-fetch get_device_list before further edits.
+
+    Parameters:
+    - track_index: The index of the track
+    - device_index: The index of the device to delete
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("delete_device", {
+            "track_index": track_index,
+            "device_index": device_index
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error deleting device: {str(e)}")
+        return f"Error deleting device: {str(e)}"
+
+@mcp.tool()
+def move_device(ctx: Context, track_index: int, device_index: int, new_index: int) -> str:
+    """
+    Reorder a device within a track's device chain.
+
+    NOTE: reliable device reordering is not guaranteed to be exposed in every
+    Live version's LOM. If Track.move_device is unavailable this returns a clear
+    error rather than faking the move — verify in Live 12 before relying on it.
+
+    Parameters:
+    - track_index: The index of the track
+    - device_index: The current index of the device
+    - new_index: The target index within the device chain
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("move_device", {
+            "track_index": track_index,
+            "device_index": device_index,
+            "new_index": new_index
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error moving device: {str(e)}")
+        return f"Error moving device: {str(e)}"
+
+
+# --- C. Note editing beyond append ---
+
+@mcp.tool()
+def clear_clip_notes(ctx: Context, track_index: int, clip_index: int) -> str:
+    """
+    Remove ALL MIDI notes from a clip, leaving the (empty) clip in place.
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - clip_index: The index of the clip slot containing the clip
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("clear_clip_notes", {
+            "track_index": track_index,
+            "clip_index": clip_index
+        })
+        return f"Cleared all notes from clip at track {track_index}, slot {clip_index}"
+    except Exception as e:
+        logger.error(f"Error clearing clip notes: {str(e)}")
+        return f"Error clearing clip notes: {str(e)}"
+
+@mcp.tool()
+def replace_clip_notes(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    notes: List[Dict[str, Union[int, float, bool]]]
+) -> str:
+    """
+    Replace the entire content of a MIDI clip: clears existing notes and writes the
+    supplied notes (clear + add). Uses Live's extended note API, so notes may carry
+    extended fields in addition to the basics.
+
+    Note dict fields:
+    - pitch (0-127), start_time (beats), duration (beats), velocity (1-127), mute (bool)
+    - probability (0.0-1.0, optional), velocity_deviation (optional),
+      release_velocity (0-127, optional)
+
+    Notes are validated/built before the clip is cleared, so a malformed payload
+    will not wipe the clip.
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - clip_index: The index of the clip slot containing the clip
+    - notes: List of note dictionaries (see fields above)
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("replace_clip_notes", {
+            "track_index": track_index,
+            "clip_index": clip_index,
+            "notes": notes
+        })
+        return f"Replaced clip at track {track_index}, slot {clip_index} with {result.get('note_count', len(notes))} notes"
+    except Exception as e:
+        logger.error(f"Error replacing clip notes: {str(e)}")
+        return f"Error replacing clip notes: {str(e)}"
+
+@mcp.tool()
+def remove_notes(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    from_time: float = 0.0,
+    to_time: float = None,
+    from_pitch: int = 0,
+    to_pitch: int = 128
+) -> str:
+    """
+    Remove MIDI notes inside a time/pitch rectangle from a clip (selective delete).
+    Notes whose start falls in [from_time, to_time) and [from_pitch, to_pitch) are
+    removed.
+
+    Parameters:
+    - track_index: The index of the track containing the clip
+    - clip_index: The index of the clip slot containing the clip
+    - from_time: Start of the time window in beats (default 0.0)
+    - to_time: End of the time window in beats (default: end of clip)
+    - from_pitch: Lowest pitch to remove, inclusive (default 0)
+    - to_pitch: Upper pitch bound, exclusive (default 128 = all pitches)
+    """
+    try:
+        ableton = get_ableton_connection()
+        params = {
+            "track_index": track_index,
+            "clip_index": clip_index,
+            "from_time": from_time,
+            "from_pitch": from_pitch,
+            "to_pitch": to_pitch,
+        }
+        if to_time is not None:
+            params["to_time"] = to_time
+        result = ableton.send_command("remove_notes", params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error removing notes: {str(e)}")
+        return f"Error removing notes: {str(e)}"
+
 
 # Main execution
 def main():
