@@ -131,6 +131,61 @@ Once the config file has been set on Claude, and the remote script is running in
 - Add notes to MIDI clips
 - Change tempo and other session parameters
 
+## Tools
+
+This fork exposes **42 MCP tools** (29 baseline + 13 added for Live 12 "deep control", P0).
+The tables below list the new tools grouped by area. See each tool's docstring in
+`MCP_Server/server.py` for full parameters.
+
+### A. Tonalità / Global Scale (Live 12)
+
+| Tool | What it does |
+|---|---|
+| `get_scale` | Read `root_note` (0-11), `scale_name`, `scale_intervals`, `scale_mode` |
+| `set_scale(root_note, scale_name)` | Set the global scale root + name (e.g. 5 / "Minor") |
+| `set_scale_mode(enabled)` | Toggle the global Scale feature on/off |
+
+> Requires Live 12 (`Song.root_note` / `Song.scale_name` / `Song.scale_mode`). On
+> older Live versions the reads return `null` and the setters return a clear error.
+> Per-clip scale (Live 12.2) is **not** implemented yet (deferred stretch item).
+
+### B. Device & parameters
+
+| Tool | What it does |
+|---|---|
+| `get_device_list(track)` | List devices: index, name, class_name, type, is_active, can_have_chains, num_parameters |
+| `get_device_parameters(track, device)` | List a device's parameters: index, name, value, min, max, is_quantized, value_items, display_value |
+| `set_device_parameter(track, device, parameter, value)` | Set one parameter by **index or name** (value clamped to range) |
+| `set_device_parameters(track, device, {name: value, ...})` | Batch-patch a device; per-parameter errors reported, not fatal |
+| `toggle_device(track, device, on)` | Enable/bypass via the device's `Device On` parameter (`is_active` is read-only in the LOM) |
+| `delete_device(track, device)` | Remove a device from the track's device chain |
+| `move_device(track, device, new_index)` | Reorder a device — see note below |
+
+> **`move_device` caveat:** stable device reordering is not guaranteed to be exposed
+> in every Live version's LOM. The handler calls `Track.move_device(...)` if present
+> and otherwise returns an explicit error rather than faking the move — needs a
+> Live 12 smoke-test to confirm.
+>
+> **Nested / rack chain access** (`get_device_chain`, devices inside Instrument/Audio
+> Effect Racks) is **deferred** as a follow-up: the top-level `track.devices` path is
+> clean, but chain traversal needs its own path scheme and is out of P0 scope.
+
+### C. Note editing beyond append
+
+| Tool | What it does |
+|---|---|
+| `clear_clip_notes(track, clip)` | Remove all notes from a MIDI clip |
+| `replace_clip_notes(track, clip, notes)` | Clear + add (notes built before clearing, so a bad payload can't wipe the clip) |
+| `remove_notes(track, clip, from_time, to_time, from_pitch, to_pitch)` | Delete notes inside a time/pitch rectangle |
+
+These use Live 11+'s **extended note API** (`get_notes_extended` / `add_new_notes`
+with `MidiNoteSpecification` / `remove_notes_extended`), so notes support the extended
+fields `probability`, `velocity_deviation` and `release_velocity`. `get_clip_notes`
+now also returns `note_id`, `probability`, `velocity_deviation` and `release_velocity`
+for targeted editing (falling back to the legacy tuple API if the extended one is
+unavailable). The legacy `add_notes_to_clip` (tuple `set_notes`) is unchanged and still
+works.
+
 ## Example Commands
 
 Here are some examples of what you can ask Claude to do:

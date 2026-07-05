@@ -235,6 +235,15 @@ class AbletonMCP(ControlSurface):
             elif command_type == "list_arrangement_clips":
                 track_index = params.get("track_index", 0)
                 response["result"] = self._list_arrangement_clips(track_index)
+            elif command_type == "get_scale":
+                response["result"] = self._get_scale()
+            elif command_type == "get_device_list":
+                track_index = params.get("track_index", 0)
+                response["result"] = self._get_device_list(track_index)
+            elif command_type == "get_device_parameters":
+                track_index = params.get("track_index", 0)
+                device_index = params.get("device_index", 0)
+                response["result"] = self._get_device_parameters(track_index, device_index)
             # Commands that modify Live's state should be scheduled on the main thread
             elif command_type in ["create_midi_track", "set_track_name",
                                  "create_clip", "add_notes_to_clip", "set_clip_name",
@@ -245,7 +254,12 @@ class AbletonMCP(ControlSurface):
                                  "set_track_color", "set_scene_color",
                                  "create_arrangement_midi_clip",
                                  "add_notes_to_arrangement_clip",
-                                 "duplicate_session_clip_to_arrangement"]:
+                                 "duplicate_session_clip_to_arrangement",
+                                 "set_scale", "set_scale_mode",
+                                 "set_device_parameter", "set_device_parameters",
+                                 "toggle_device", "delete_device", "move_device",
+                                 "clear_clip_notes", "replace_clip_notes",
+                                 "remove_notes"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -343,6 +357,55 @@ class AbletonMCP(ControlSurface):
                             clip_index = params.get("clip_index", 0)
                             time = params.get("time", 0.0)
                             result = self._duplicate_session_clip_to_arrangement(track_index, clip_index, time)
+                        elif command_type == "set_scale":
+                            root_note = params.get("root_note", None)
+                            scale_name = params.get("scale_name", None)
+                            result = self._set_scale(root_note, scale_name)
+                        elif command_type == "set_scale_mode":
+                            enabled = params.get("enabled", True)
+                            result = self._set_scale_mode(enabled)
+                        elif command_type == "set_device_parameter":
+                            track_index = params.get("track_index", 0)
+                            device_index = params.get("device_index", 0)
+                            parameter = params.get("parameter", None)
+                            value = params.get("value", None)
+                            result = self._set_device_parameter(track_index, device_index, parameter, value)
+                        elif command_type == "set_device_parameters":
+                            track_index = params.get("track_index", 0)
+                            device_index = params.get("device_index", 0)
+                            parameters = params.get("parameters", {})
+                            result = self._set_device_parameters(track_index, device_index, parameters)
+                        elif command_type == "toggle_device":
+                            track_index = params.get("track_index", 0)
+                            device_index = params.get("device_index", 0)
+                            on = params.get("on", True)
+                            result = self._toggle_device(track_index, device_index, on)
+                        elif command_type == "delete_device":
+                            track_index = params.get("track_index", 0)
+                            device_index = params.get("device_index", 0)
+                            result = self._delete_device(track_index, device_index)
+                        elif command_type == "move_device":
+                            track_index = params.get("track_index", 0)
+                            device_index = params.get("device_index", 0)
+                            new_index = params.get("new_index", 0)
+                            result = self._move_device(track_index, device_index, new_index)
+                        elif command_type == "clear_clip_notes":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            result = self._clear_clip_notes(track_index, clip_index)
+                        elif command_type == "replace_clip_notes":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            notes = params.get("notes", [])
+                            result = self._replace_clip_notes(track_index, clip_index, notes)
+                        elif command_type == "remove_notes":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            from_time = params.get("from_time", None)
+                            to_time = params.get("to_time", None)
+                            from_pitch = params.get("from_pitch", None)
+                            to_pitch = params.get("to_pitch", None)
+                            result = self._remove_notes(track_index, clip_index, from_time, to_time, from_pitch, to_pitch)
 
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -881,19 +944,46 @@ class AbletonMCP(ControlSurface):
             if not clip.is_midi_clip:
                 raise Exception("Clip is not a MIDI clip")
 
-            # Clip.get_notes(from_time, from_pitch, time_span, pitch_span)
-            # Returns tuple of (pitch, time, duration, velocity, mute) tuples
-            raw_notes = clip.get_notes(0.0, 0, clip.length, 128)
-
+            # Prefer the extended note API (Live 11+): it exposes note_id,
+            # probability, velocity_deviation and release_velocity, which the
+            # legacy tuple API cannot return. Fall back to get_notes() if the
+            # extended API is unavailable or misbehaves on this Live version.
+            #
+            # NB: get_notes_extended(from_pitch, pitch_span, from_time, time_span)
+            # takes pitch args FIRST, unlike the legacy get_notes(from_time,
+            # from_pitch, time_span, pitch_span).
             notes = []
-            for n in raw_notes:
-                notes.append({
-                    "pitch": n[0],
-                    "start_time": n[1],
-                    "duration": n[2],
-                    "velocity": n[3],
-                    "mute": n[4]
-                })
+            used_extended = False
+            if hasattr(clip, "get_notes_extended"):
+                try:
+                    ext = clip.get_notes_extended(0, 128, 0.0, clip.length)
+                    for n in ext:
+                        notes.append({
+                            "note_id": getattr(n, "note_id", None),
+                            "pitch": n.pitch,
+                            "start_time": n.start_time,
+                            "duration": n.duration,
+                            "velocity": n.velocity,
+                            "mute": n.mute,
+                            "probability": getattr(n, "probability", None),
+                            "velocity_deviation": getattr(n, "velocity_deviation", None),
+                            "release_velocity": getattr(n, "release_velocity", None),
+                        })
+                    used_extended = True
+                except Exception as ext_err:
+                    self.log_message("get_notes_extended failed, falling back to legacy get_notes: " + str(ext_err))
+                    notes = []
+
+            if not used_extended:
+                raw_notes = clip.get_notes(0.0, 0, clip.length, 128)
+                for n in raw_notes:
+                    notes.append({
+                        "pitch": n[0],
+                        "start_time": n[1],
+                        "duration": n[2],
+                        "velocity": n[3],
+                        "mute": n[4]
+                    })
 
             result = {
                 "track_index": track_index,
@@ -904,7 +994,8 @@ class AbletonMCP(ControlSurface):
                 "signature_numerator": clip.signature_numerator,
                 "signature_denominator": clip.signature_denominator,
                 "note_count": len(notes),
-                "notes": notes
+                "notes": notes,
+                "extended": used_extended
             }
             return result
         except Exception as e:
@@ -1185,6 +1276,454 @@ class AbletonMCP(ControlSurface):
             return self._arrangement_clip_summary(track.arrangement_clips[best_idx], best_idx)
         except Exception as e:
             self.log_message("Error duplicating session clip to arrangement: " + str(e))
+            raise
+
+    # --- A. Global Scale (Live 12) ---
+
+    def _get_scale(self):
+        """Read the global Scale settings (Live 12).
+
+        Reads are guarded because these Song attributes only exist on Live 12+;
+        on an older Live they come back as None with scale_supported=False rather
+        than crashing.
+        """
+        try:
+            song = self._song
+            result = {
+                "root_note": song.root_note if hasattr(song, "root_note") else None,
+                "scale_name": song.scale_name if hasattr(song, "scale_name") else None,
+                "scale_mode": song.scale_mode if hasattr(song, "scale_mode") else None,
+                "scale_supported": hasattr(song, "scale_name"),
+            }
+            # scale_intervals is read-only and may be a Live vector -> coerce to list
+            if hasattr(song, "scale_intervals"):
+                try:
+                    result["scale_intervals"] = list(song.scale_intervals)
+                except Exception:
+                    result["scale_intervals"] = None
+            else:
+                result["scale_intervals"] = None
+            return result
+        except Exception as e:
+            self.log_message("Error getting scale: " + str(e))
+            raise
+
+    def _set_scale(self, root_note, scale_name):
+        """Set the global scale root note (int 0-11, C=0..B=11) and/or scale name.
+
+        Either argument may be None to leave that field unchanged.
+        """
+        try:
+            song = self._song
+            if not hasattr(song, "scale_name"):
+                raise Exception("Global Scale is not supported by this Live version (requires Live 12)")
+            if root_note is not None:
+                rn = int(root_note)
+                if rn < 0 or rn > 11:
+                    raise ValueError("root_note must be between 0 and 11")
+                song.root_note = rn
+            if scale_name is not None:
+                song.scale_name = scale_name
+            return {
+                "root_note": song.root_note,
+                "scale_name": song.scale_name,
+                "scale_intervals": list(song.scale_intervals) if hasattr(song, "scale_intervals") else None,
+            }
+        except Exception as e:
+            self.log_message("Error setting scale: " + str(e))
+            raise
+
+    def _set_scale_mode(self, enabled):
+        """Toggle the global Scale mode on/off (bool)."""
+        try:
+            song = self._song
+            if not hasattr(song, "scale_mode"):
+                raise Exception("scale_mode is not supported by this Live version (requires Live 12)")
+            song.scale_mode = bool(enabled)
+            return {"scale_mode": song.scale_mode}
+        except Exception as e:
+            self.log_message("Error setting scale mode: " + str(e))
+            raise
+
+    # --- B. Devices & parameters ---
+
+    def _get_track_or_raise(self, track_index):
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        return self._song.tracks[track_index]
+
+    def _get_device_or_raise(self, track, device_index):
+        if device_index < 0 or device_index >= len(track.devices):
+            raise IndexError("Device index out of range")
+        return track.devices[device_index]
+
+    def _parameter_info(self, param, index):
+        """Serialize a DeviceParameter to a JSON-safe dict."""
+        info = {
+            "index": index,
+            "name": param.name,
+            "value": param.value,
+            "min": param.min,
+            "max": param.max,
+            "is_quantized": param.is_quantized,
+        }
+        # Human-readable display value (e.g. "440 Hz", "On")
+        try:
+            info["display_value"] = str(param.str_for_value(param.value))
+        except Exception:
+            try:
+                info["display_value"] = str(param.display_value)
+            except Exception:
+                info["display_value"] = None
+        # Enumerated options for quantized params (e.g. filter type names)
+        try:
+            if param.is_quantized and param.value_items:
+                info["value_items"] = [str(v) for v in param.value_items]
+        except Exception:
+            pass
+        return info
+
+    def _resolve_parameter(self, device, parameter):
+        """Resolve a device parameter by index (int / digit-string) or by name.
+
+        Returns (parameter_object, resolved_index).
+        """
+        params = device.parameters
+        if isinstance(parameter, bool) or parameter is None:
+            raise ValueError("A parameter index or name is required")
+        if isinstance(parameter, int):
+            if parameter < 0 or parameter >= len(params):
+                raise IndexError("Parameter index out of range")
+            return params[parameter], parameter
+        if isinstance(parameter, str):
+            stripped = parameter.strip()
+            if stripped.lstrip("-").isdigit():
+                idx = int(stripped)
+                if idx < 0 or idx >= len(params):
+                    raise IndexError("Parameter index out of range")
+                return params[idx], idx
+            # exact name match first, then case-insensitive
+            for i, p in enumerate(params):
+                if p.name == parameter:
+                    return p, i
+            for i, p in enumerate(params):
+                if p.name.lower() == parameter.lower():
+                    return p, i
+            raise ValueError("Parameter '{0}' not found on device".format(parameter))
+        raise ValueError("Parameter must be an index (int) or a name (str)")
+
+    def _apply_parameter_value(self, param, value):
+        """Clamp value into [param.min, param.max] and set it. Returns applied value."""
+        val = float(value)
+        lo = param.min
+        hi = param.max
+        if val < lo:
+            val = lo
+        elif val > hi:
+            val = hi
+        param.value = val
+        return val
+
+    def _get_device_list(self, track_index):
+        """List the devices on a track with type/activity/param-count metadata."""
+        try:
+            track = self._get_track_or_raise(track_index)
+            devices = []
+            for i, device in enumerate(track.devices):
+                devices.append({
+                    "index": i,
+                    "name": device.name,
+                    "class_name": device.class_name,
+                    "type": self._get_device_type(device),
+                    "is_active": device.is_active if hasattr(device, "is_active") else None,
+                    "can_have_chains": device.can_have_chains if hasattr(device, "can_have_chains") else False,
+                    "num_parameters": len(device.parameters),
+                })
+            return {
+                "track_index": track_index,
+                "device_count": len(devices),
+                "devices": devices,
+            }
+        except Exception as e:
+            self.log_message("Error getting device list: " + str(e))
+            raise
+
+    def _get_device_parameters(self, track_index, device_index):
+        """List every parameter of a device (index, name, value, range, enum items)."""
+        try:
+            track = self._get_track_or_raise(track_index)
+            device = self._get_device_or_raise(track, device_index)
+            params = [self._parameter_info(p, i) for i, p in enumerate(device.parameters)]
+            return {
+                "track_index": track_index,
+                "device_index": device_index,
+                "device_name": device.name,
+                "class_name": device.class_name,
+                "parameter_count": len(params),
+                "parameters": params,
+            }
+        except Exception as e:
+            self.log_message("Error getting device parameters: " + str(e))
+            raise
+
+    def _set_device_parameter(self, track_index, device_index, parameter, value):
+        """Set one device parameter (by index or name). Value is clamped to range."""
+        try:
+            if parameter is None:
+                raise ValueError("parameter is required (index or name)")
+            if value is None:
+                raise ValueError("value is required")
+            track = self._get_track_or_raise(track_index)
+            device = self._get_device_or_raise(track, device_index)
+            param, idx = self._resolve_parameter(device, parameter)
+            if hasattr(param, "is_enabled") and not param.is_enabled:
+                raise Exception("Parameter '{0}' is not enabled/automatable".format(param.name))
+            applied = self._apply_parameter_value(param, value)
+            return {
+                "track_index": track_index,
+                "device_index": device_index,
+                "parameter_index": idx,
+                "parameter_name": param.name,
+                "value": param.value,
+                "requested_value": value,
+                "clamped": applied != float(value),
+            }
+        except Exception as e:
+            self.log_message("Error setting device parameter: " + str(e))
+            raise
+
+    def _set_device_parameters(self, track_index, device_index, parameters):
+        """Batch-set device parameters from a {name_or_index: value} mapping.
+
+        Per-parameter failures are collected in `errors` so one bad key doesn't
+        abort the whole patch.
+        """
+        try:
+            track = self._get_track_or_raise(track_index)
+            device = self._get_device_or_raise(track, device_index)
+            results = []
+            errors = []
+            for key, value in parameters.items():
+                try:
+                    param, idx = self._resolve_parameter(device, key)
+                    if hasattr(param, "is_enabled") and not param.is_enabled:
+                        raise Exception("parameter not enabled")
+                    self._apply_parameter_value(param, value)
+                    results.append({
+                        "parameter": key,
+                        "parameter_index": idx,
+                        "name": param.name,
+                        "value": param.value,
+                    })
+                except Exception as ie:
+                    errors.append({"parameter": key, "error": str(ie)})
+            return {
+                "track_index": track_index,
+                "device_index": device_index,
+                "set_count": len(results),
+                "results": results,
+                "errors": errors,
+            }
+        except Exception as e:
+            self.log_message("Error setting device parameters: " + str(e))
+            raise
+
+    def _toggle_device(self, track_index, device_index, on):
+        """Enable/bypass a device.
+
+        Device.is_active is read-only in the LOM; on/off is driven through the
+        device's 'Device On' parameter (present on native Live devices, usually
+        parameters[0]). If no such parameter exists we raise rather than fake it.
+        """
+        try:
+            track = self._get_track_or_raise(track_index)
+            device = self._get_device_or_raise(track, device_index)
+            on_param = None
+            for p in device.parameters:
+                if p.name == "Device On":
+                    on_param = p
+                    break
+            if on_param is None:
+                raise Exception("Device '{0}' has no 'Device On' parameter; cannot toggle via LOM".format(device.name))
+            on_param.value = 1.0 if on else 0.0
+            return {
+                "track_index": track_index,
+                "device_index": device_index,
+                "device_name": device.name,
+                "is_active": device.is_active if hasattr(device, "is_active") else None,
+                "on": bool(on_param.value),
+            }
+        except Exception as e:
+            self.log_message("Error toggling device: " + str(e))
+            raise
+
+    def _delete_device(self, track_index, device_index):
+        """Delete a device from a track's device chain (Track.delete_device)."""
+        try:
+            track = self._get_track_or_raise(track_index)
+            if device_index < 0 or device_index >= len(track.devices):
+                raise IndexError("Device index out of range")
+            device_name = track.devices[device_index].name
+            track.delete_device(device_index)
+            return {
+                "track_index": track_index,
+                "deleted_index": device_index,
+                "deleted_name": device_name,
+                "device_count": len(track.devices),
+            }
+        except Exception as e:
+            self.log_message("Error deleting device: " + str(e))
+            raise
+
+    def _move_device(self, track_index, device_index, new_index):
+        """Reorder a device within a track's device chain.
+
+        LOM CAVEAT: reliable public device-reordering is not guaranteed across
+        Live versions. We call Track.move_device(...) when present and otherwise
+        raise a clear error instead of silently faking the move.
+        """
+        try:
+            track = self._get_track_or_raise(track_index)
+            count = len(track.devices)
+            if device_index < 0 or device_index >= count:
+                raise IndexError("Device index out of range")
+            if new_index < 0 or new_index >= count:
+                raise IndexError("new_index out of range")
+            device_name = track.devices[device_index].name
+            if hasattr(track, "move_device"):
+                track.move_device(device_index, new_index)
+            else:
+                raise Exception("Track.move_device is not available in this Live version's LOM; device reordering is not exposed via the API")
+            return {
+                "track_index": track_index,
+                "moved_name": device_name,
+                "from_index": device_index,
+                "to_index": new_index,
+                "device_count": len(track.devices),
+            }
+        except Exception as e:
+            self.log_message("Error moving device: " + str(e))
+            raise
+
+    # --- C. Note editing beyond append ---
+
+    def _get_clip_or_raise(self, track_index, clip_index):
+        track = self._get_track_or_raise(track_index)
+        if clip_index < 0 or clip_index >= len(track.clip_slots):
+            raise IndexError("Clip index out of range")
+        clip_slot = track.clip_slots[clip_index]
+        if not clip_slot.has_clip:
+            raise Exception("No clip in slot")
+        return clip_slot.clip
+
+    def _build_note_specifications(self, notes):
+        """Build a tuple of Live.Clip.MidiNoteSpecification objects from note dicts.
+
+        Supports the extended fields probability, velocity_deviation and
+        release_velocity (Live 11+). Core fields fall back to sane defaults.
+        """
+        try:
+            from Live.Clip import MidiNoteSpecification
+        except Exception as e:
+            raise Exception("MidiNoteSpecification unavailable (requires Live 11+): " + str(e))
+        specs = []
+        for note in notes:
+            kwargs = {
+                "pitch": int(note.get("pitch", 60)),
+                "start_time": float(note.get("start_time", 0.0)),
+                "duration": float(note.get("duration", 0.25)),
+                "velocity": float(note.get("velocity", 100)),
+                "mute": bool(note.get("mute", False)),
+            }
+            if note.get("probability", None) is not None:
+                kwargs["probability"] = float(note["probability"])
+            if note.get("velocity_deviation", None) is not None:
+                kwargs["velocity_deviation"] = float(note["velocity_deviation"])
+            if note.get("release_velocity", None) is not None:
+                kwargs["release_velocity"] = float(note["release_velocity"])
+            specs.append(MidiNoteSpecification(**kwargs))
+        return tuple(specs)
+
+    def _clip_clear_all_notes(self, clip):
+        """Remove every note from a MIDI clip, preferring the extended API."""
+        if hasattr(clip, "remove_notes_extended"):
+            # remove_notes_extended(from_pitch, pitch_span, from_time, time_span)
+            clip.remove_notes_extended(0, 128, 0.0, 1073741824.0)
+        else:
+            clip.select_all_notes()
+            clip.replace_selected_notes(tuple())
+
+    def _clear_clip_notes(self, track_index, clip_index):
+        """Remove all notes from a MIDI clip."""
+        try:
+            clip = self._get_clip_or_raise(track_index, clip_index)
+            if not clip.is_midi_clip:
+                raise Exception("Clip is not a MIDI clip")
+            self._clip_clear_all_notes(clip)
+            return {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "cleared": True,
+            }
+        except Exception as e:
+            self.log_message("Error clearing clip notes: " + str(e))
+            raise
+
+    def _replace_clip_notes(self, track_index, clip_index, notes):
+        """Clear a MIDI clip then add the supplied notes (clear + add, atomic-ish)."""
+        try:
+            clip = self._get_clip_or_raise(track_index, clip_index)
+            if not clip.is_midi_clip:
+                raise Exception("Clip is not a MIDI clip")
+            # Build specs BEFORE clearing so a bad note payload doesn't wipe the clip.
+            specs = self._build_note_specifications(notes)
+            self._clip_clear_all_notes(clip)
+            if specs:
+                clip.add_new_notes(specs)
+            return {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "note_count": len(specs),
+            }
+        except Exception as e:
+            self.log_message("Error replacing clip notes: " + str(e))
+            raise
+
+    def _remove_notes(self, track_index, clip_index, from_time, to_time, from_pitch, to_pitch):
+        """Remove notes in a time/pitch rectangle via remove_notes_extended.
+
+        Defaults span the whole clip: from_time=0, to_time=clip.length,
+        from_pitch=0, to_pitch=128.
+        """
+        try:
+            clip = self._get_clip_or_raise(track_index, clip_index)
+            if not clip.is_midi_clip:
+                raise Exception("Clip is not a MIDI clip")
+            if not hasattr(clip, "remove_notes_extended"):
+                raise Exception("remove_notes_extended unavailable (requires Live 11+)")
+            from_pitch = 0 if from_pitch is None else int(from_pitch)
+            to_pitch = 128 if to_pitch is None else int(to_pitch)
+            from_time = 0.0 if from_time is None else float(from_time)
+            to_time = clip.length if to_time is None else float(to_time)
+            pitch_span = to_pitch - from_pitch
+            time_span = to_time - from_time
+            if pitch_span <= 0:
+                raise ValueError("to_pitch must be greater than from_pitch")
+            if time_span <= 0:
+                raise ValueError("to_time must be greater than from_time")
+            # remove_notes_extended(from_pitch, pitch_span, from_time, time_span)
+            clip.remove_notes_extended(from_pitch, pitch_span, from_time, time_span)
+            return {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "from_time": from_time,
+                "to_time": to_time,
+                "from_pitch": from_pitch,
+                "to_pitch": to_pitch,
+                "removed": True,
+            }
+        except Exception as e:
+            self.log_message("Error removing notes: " + str(e))
             raise
 
     # Helper methods
